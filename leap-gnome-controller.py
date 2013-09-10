@@ -25,17 +25,21 @@ from Xlib.ext.xtest import fake_input
 from gi.repository import Gdk
 import sys, time, math
 from Leap import CircleGesture, SwipeGesture
+import time
+
 
 ACTIVITIES_KEY = (XK.XK_Super_L,)
+SNAP_LEFT = (XK.XK_Super_L, XK.XK_Left)
+SNAP_RIGHT = (XK.XK_Super_L, XK.XK_Right)
+SNAP_MAX = (XK.XK_Super_L, XK.XK_Up)
+SNAP_MIN = (XK.XK_Super_L, XK.XK_Down)
 MOVE_DESKTOP_BASE_KEY_COMBO = (XK.XK_Meta_L, XK.XK_Control_L)
 INCREASE_ZOOM_COMBO = (XK.XK_Control_L, XK.XK_plus)
 DECREASE_ZOOM_COMBO = (XK.XK_Control_L, XK.XK_minus)
 
 class EventManager(object):
 
-    POINTER_MOVE_THRESHOLD = 150.0 # px
     POINTER_MIN_MOVE = 2.0 # px
-    POINTER_STOP_TIMEOUT = .5 # seconds
     ZOOM_THRESHOLD = 20 # mm
     ZOOM_FUNCTION_DURATION = .2 # seconds
     ZOOM_FUNCTION_RESET_TIMEOUT = 2 # seconds
@@ -62,19 +66,20 @@ class EventManager(object):
         data = self._display.screen().root.query_pointer()._data
         pos_x, pos_y = data['root_x'], data['root_y']
         current_time = time.time()
-        if current_time - self._last_pointer_move > self.POINTER_STOP_TIMEOUT:
-            dist = math.sqrt(pow(pos_x - x, 2) + pow(pos_y - y, 2))
-            # Pointer is "stopped", we only move it in this condition
-            if dist > self.POINTER_MOVE_THRESHOLD:
-                self._set_pointer(x, y)
-                self._last_pointer_move = current_time
-        else:
-            self._set_pointer(x, y)
-            if abs(pos_x - x) > self.POINTER_MIN_MOVE:
+        self._set_pointer(x, y)
+        if abs(pos_x - x) > self.POINTER_MIN_MOVE:
                 self._last_pointer_move = current_time
 
     def click(self):
         fake_input(self._display, X.ButtonPress, 1)
+        fake_input(self._display, X.ButtonRelease, 1)
+        self._display.sync()
+
+    def mouse_press(self):
+        fake_input(self._display, X.ButtonPress, 1)
+        self._display.sync()
+
+    def mouse_release(self):
         fake_input(self._display, X.ButtonRelease, 1)
         self._display.sync()
 
@@ -142,11 +147,18 @@ class EventManager(object):
 class ControllerListener(Leap.Listener):
 
     MIN_CIRCLE_RADIUS = 100.0
-    MIN_SWIPE_LENGTH = 150.0
+    MIN_SWIPE_LENGTH = 200.0
     ENABLED_GESTURES = [Leap.Gesture.TYPE_CIRCLE,
                         Leap.Gesture.TYPE_SCREEN_TAP,
                         Leap.Gesture.TYPE_KEY_TAP,
                         Leap.Gesture.TYPE_SWIPE]
+    last_num_fingers = 1
+    last_event = 0
+    CLICK_TIMEOUT = 400
+    disable = False
+    THUMB_THRESH = -0.5
+    last_swipe = 0
+    SWIPE_THRESH = 400
 
     def __init__(self):
         Leap.Listener.__init__(self)
@@ -170,47 +182,34 @@ class ControllerListener(Leap.Listener):
         distance = point1.distance_to(point2)
         self._event_manager.zoom(distance)
 
+    def dot(self, u, w):
+	print "cos theta = ", abs(u.x * w.x + u.y * w.y + u.z * w.z)/(self.mag(u) * self.mag(w))
+        return u.x * w.x + u.y * w.y + u.z * w.z
+    
+    def mag(self, u):
+        return math.sqrt(u.x * u.x + u.y * u.y + u.z * u.z)
+
     def handle_one_hand(self, frame):
-        if len(frame.fingers) < 3:
+	if (len(frame.fingers) <= 3):
+            millis = int(round(time.time() * 1000))
             for gesture in frame.gestures():
-                if gesture.type == Leap.Gesture.TYPE_KEY_TAP:
-                    self._event_manager.click()
-                    return
-
-                if gesture.type == Leap.Gesture.TYPE_CIRCLE:
-                    self._event_manager.toggle_activities()
-
-            # Move the pointer
-            interaction_box = frame.interaction_box
-            if frame.pointables:
-                pointable = frame.pointables.frontmost
-                position = interaction_box.normalize_point(pointable.tip_position)
-                pos_x = position.x * self._screen_width
-                pos_y = self._screen_height - position.y * self._screen_height
-                self._event_manager.move_pointer(pos_x, pos_y)
-
+	         if gesture.type == Leap.Gesture.TYPE_SWIPE and millis - self.last_swipe > self.SWIPE_THRESH:
+                     self.last_swipe = millis
+                     swipe = SwipeGesture(gesture)
+		     mag_x = abs(swipe.direction.x)
+                     mag_y = abs(swipe.direction.y)
+                     if (mag_x >= mag_y):
+                         if (swipe.direction.x < 0):
+                             self._event_manager._press_and_release_key_combo(SNAP_LEFT)
+                         else:
+	                     self._event_manager._press_and_release_key_combo(SNAP_RIGHT)
+                     else:
+                         if (swipe.direction.y > 0):
+                             self._event_manager._press_and_release_key_combo(SNAP_MAX)
+                         else:
+	                     self._event_manager._press_and_release_key_combo(SNAP_MIN)
         if len(frame.fingers) > 4:
-            swipe_gestures = []
-            for gesture in frame.gestures():
-                if gesture.type != Leap.Gesture.TYPE_SWIPE:
-                    continue
-                swipe = SwipeGesture(gesture)
-
-                if not swipe_gestures:
-                    swipe_gestures.append(swipe)
-                    continue
-
-                previous_swipe = swipe_gestures[0]
-                angle_diff = previous_swipe.direction.roll - swipe.direction.roll
-                if abs(angle_diff) < Leap.PI / 2.0:
-                    swipe_gestures.append(swipe)
-
-                angle = abs(swipe.direction.roll) % Leap.PI
-                if len(swipe_gestures) > 2:
-                    if angle < Leap.PI / 4:
-                        self._event_manager.move_next_desktop()
-                    if angle > Leap.PI - Leap.PI / 4:
-                        self._event_manager.move_previous_desktop()
+	    self._event_manager.toggle_activities()           
 
     def on_frame(self, controller):
         frame = controller.frame()

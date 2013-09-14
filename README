@@ -26,9 +26,10 @@ List of Gestures
 -----------------
 
 -----------------------------------------------------------------------------------
-| Toggle Activities View        | Full hand above sensor                          |
-| Increase/Decrease Zoom        | Pinch gesture using two hands' pointing fingers |
-| Snap Screen | Swipe left/right/up/down with two fingers                         |
+| Toggle Activities View        | Full hand above sensor                                                     |
+| Use mouse                     | Point with finger, click by opening thumb (only when activities view open) |
+| Change workspace              | Swipe up/down with four fingers                                            |
+| Snap Screen                   | Swipe left/right/up/down with two fingers                                  |
 -----------------------------------------------------------------------------------
 
 More gestures may be added in the future!
